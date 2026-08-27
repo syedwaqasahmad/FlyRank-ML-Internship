@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Content Visibility Churn Report</title>
+<style>
+body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #1a1a1a; }
+h1 { border-bottom: 2px solid #333; padding-bottom: 10px; }
+h2 { border-bottom: 1px solid #ddd; padding-bottom: 6px; margin-top: 40px; }
+table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: left; }
+th { background: #f5f5f5; }
+code { background: #f2f2f2; padding: 2px 5px; border-radius: 3px; font-size: 0.9em; }
+pre { background: #f2f2f2; padding: 12px; border-radius: 5px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+hr { border: none; border-top: 1px solid #ddd; margin: 30px 0; }
+</style>
+</head>
+<body>
+<h1>Capstone Report — Content Visibility Churn (Freestyle Lane)</h1>
+<ul>
+<li><strong>Author:</strong> Syed Waqas Ahmad</li>
+<li><strong>Lane:</strong> Freestyle — Content Visibility Churn (inspired by customer churn analysis, reframed onto FlyRank's search data)</li>
+<li><strong>Repo:</strong> https://github.com/syedwaqasahmad/FlyRank-ML-Internship</li>
+<li><strong>Date:</strong> August 2026</li>
+</ul>
+<h2>0. Abstract</h2>
+<p>This study asks whether observable, pre-decision search signals — visibility, freshness, ranking position, and content depth — can predict which content pages will decline in search visibility ("churn"), well enough to prioritize a limited weekly content-review queue. Using a single-snapshot anonymized dataset of 30,000 pages across 32 clients, we compare a carefully audited hand-written rule against a Random Forest model under a client-holdout validation split. The honest result is nuanced: the rule holds up well at the very top of the ranked list, while the model edges ahead further down. Along the way, we caught and corrected two leakage issues — one in our own feature set, one hiding inside our own baseline formula — underscoring that honest validation matters more than a flashy headline number. This output is intended strictly as decision-support for a human content reviewer, not an automated publishing decision.</p>
+<h2>1. Problem Framing</h2>
+<p><strong>Unit of analysis:</strong> one content page (content_id).
+<strong>Decision this supports:</strong> which pages a content/SEO reviewer should check first each week, given they cannot review every page.
+<strong>Output:</strong> a ranked queue combining a model probability score with human-readable reason codes.
+<strong>Action a human takes:</strong> review the flagged page and decide whether it needs a content refresh.
+<strong>Cost of a wrong call:</strong> a false positive wastes limited reviewer time on a page that was never at risk; a false negative means a genuinely declining page goes unreviewed and keeps losing visibility.
+<strong>Why ML helps here:</strong> the ML-06 signal audit showed that individual signals (staleness, position, word count) each behave counterintuitively on their own (all three tested OPPOSITE of the naive hypothesis), while a combination of signals was strongly predictive (94.1% churn rate vs. 54.2% base rate, though covering only 0.06% of pages). A model can weigh many interacting signals jointly across the full dataset — a simple hand rule cannot.</p>
+<h2>2. Data Safety</h2>
+<p><strong>Data used:</strong> data/raw/content_refresh_anonymized.csv — a single anonymized snapshot of 30,000 pages, 32 clients, 44 columns.
+<strong>Deliberately excluded:</strong> trend_pct — the exact percentage trend_direction (our label) is computed from; confirmed as direct leakage in ML-05 (clean feature-set AUC 0.673 vs. 1.000 with trend_pct included). Any FlyRank product decision flags (health scores, workflow triage labels) were never present in this dataset by design. client_id and content_id are used only as grouping/join keys, never as model features.
+<strong>Confirmed:</strong> no client names, domains, URLs, or keywords appear anywhere in work/.</p>
+<h2>3. Baseline</h2>
+<p>Our transparent hand rule scores pages using two reason codes: "stale and still visible" (not updated in 180+ days, but still earning 500+ impressions in 90 days) and "page-one decay risk" (ranking in the top 10 but over 180 days old). An earlier third reason code — "declining with demand" — was dropped after ML-08 revealed it was built directly from the label field itself (trend_direction == "down"), making it circular rather than genuinely predictive; the corrected baseline below excludes it.</p>
+<p>This is a fair comparison because it's evaluated on the exact same client-holdout test split and metric as the model.</p>
+<h2>4. Model / Analysis</h2>
+<p><strong>Method:</strong> Random Forest classifier (200 trees, balanced class weights) — chosen for handling a mix of numeric and categorical features without heavy preprocessing, and for being less overfitting-prone than a single decision tree.
+<strong>Target:</strong> is_churned = 1 if trend_direction == "down", else 0 (a same-window proxy, not a true forward-looking outcome — see Limitations in Section 6).
+<strong>Features used:</strong> 15 numeric signals (impressions, search volume, competition, CPC, word/char count, days with impressions/sessions, content age, days since update, CTR, average position, engagement rate, scroll rate, AI traffic %) plus 8 categorical tiers (competition level, content type, main intent, age/freshness/word-count/impression/position tiers) — 54 columns total after encoding.
+<strong>Deliberately left out:</strong> trend_pct (leakage), product flags (not present), raw ID columns (join keys only).</p>
+<h2>5. Evaluation</h2>
+<p><strong>Split:</strong> client-holdout (GroupShuffleSplit grouped by client_id, 75/25, random_state=42) — not a random row split. This choice mattered enormously: a naive random split inflated Precision@20 from an honest 0.700 to an artificially inflated 0.950, simply by letting the model partially memorize client-specific patterns rather than learn transferable signal.</p>
+<p><strong>Base rate (majority class):</strong> 54.2% of all pages are "churned" (declining) — this is the number any precision score should be read against.</p>
+<table>
+<thead>
+<tr>
+<th>k</th>
+<th>Base rate</th>
+<th>Fair baseline precision</th>
+<th>Model precision</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>20</td>
+<td>0.542</td>
+<td>0.75</td>
+<td>0.70</td>
+</tr>
+<tr>
+<td>50</td>
+<td>0.542</td>
+<td>0.66</td>
+<td>0.68</td>
+</tr>
+</tbody>
+</table>
+<p>Both the baseline and the model clearly beat the base rate at both k values — the real question is which beats the other, and the answer is: neither, consistently. The baseline is sharper at k=20; the model edges ahead at k=50.</p>
+<p><strong>Error analysis (from ML-08):</strong> of 7,115 held-out test rows, 3,034 were misclassified by the model. The model's top false-positive errors tended to be pages with moderate-to-high impressions and trend_direction of "up" or "stable" — i.e., pages the model flagged as risky based on staleness/position signals that were, in this snapshot, actually holding steady or growing. This suggests the model leans hard on impressions_90d and avg_position (the two highest feature importances, 11.0% and 10.3% respectively) and can over-flag genuinely stable-but-aging pages.</p>
+<h2>6. Interpretation</h2>
+<p>The Random Forest's top features by importance were impressions_90d (11.0%), avg_position (10.3%), days_with_impressions (9.0%), content_age_days (7.6%), and days_with_sessions (6.7%) — visibility and position dominate, which lines up with intuition.</p>
+<p>A genuine surprise came from the ML-06 signal audit: staleness, position, and word count each individually behaved opposite to conventional SEO wisdom (stale pages churned less than fresh ones; low-ranked pages churned less than top-ranked ones; thin pages churned far less than long pages). Only the combination of staleness + visibility was a strong standalone signal (94.1% churn rate), and even then it covered just 17–35 pages out of 30,000. This is a well-understood "no effect" for the individual signals, and it's a valid, useful result: it means naive single-variable heuristics would have been actively misleading here.</p>
+<h2>7. Recommendation</h2>
+<p>The final output (ML-10) is a ranked action queue combining the model's probability score with human-readable reason codes (e.g. "stale and still visible," "high model risk"), so a reviewer can see not just which pages to check, but why. A FlyRank editor would use this tomorrow by pulling the top 20-50 rows each week as their review starting point — not as an automated publishing decision.</p>
+<p><strong>Confidence:</strong> moderate. Both the model and baseline clearly beat the 54.2% base rate, but neither dominates the other, and this has only been validated on one 30,000-page snapshot from 32 clients — not the full warehouse, a different time period, or clients outside this sample.</p>
+<p><strong>Limits:</strong> this is observational and single-snapshot; no causal claims are made. The is_churned label itself is a same-window proxy, not a true forward-looking outcome — a stronger future version would define churn using signals from an earlier window predicting a later, held-out window.</p>
+<h2>8. Reproducibility</h2>
+<p><strong>Random seeds:</strong> random_state=42 used throughout (train/test split and Random Forest).</p>
+<p><strong>Re-run from a fresh clone:</strong></p>
+<pre><code>git clone https://github.com/syedwaqasahmad/FlyRank-ML-Internship
+cd FlyRank-ML-Internship
+pip install -r requirements.txt
+</code></pre>
+<p>Then open work/notebooks/capstone.ipynb in Colab or Jupyter and Run All.</p>
+<p><strong>Environment:</strong> standard pandas, numpy, scikit-learn, matplotlib (see requirements.txt).
+<strong>Metrics committed:</strong> results table and chart are generated fresh each run inside work/notebooks/capstone.ipynb; the chart is saved to work/outputs/capstone_results_chart.png.</p>
+<h2>9. Acknowledgments &amp; Data Credit</h2>
+<p>Built on the FlyRank ML Internship dataset. Learn more at https://flyrank.ai.</p>
+<hr />
+<p>Claims checklist: observed / measured / directional / decision-support language used throughout · base rate (54.2%) reported alongside all precision numbers · no causal claims · no "predicted Google's algorithm" language · no client-identifying details anywhere · numbers match the capstone notebook's fresh run.</p>
+</body>
+</html>
